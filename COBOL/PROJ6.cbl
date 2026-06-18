@@ -26,27 +26,28 @@
        DATA DIVISION.
 
        FILE SECTION.
-
-       FD  ARQ-CLIENTES.
-       01  REG-IN-CLIENTE.
-           05 IN-CLI-ID          PIC 9(5).
-           05 IN-CLI-NOME        PIC X(30).
-           05 IN-CLI-SALDO       PIC 9(9).
-       FD  ARQ-TRANSAC.
-       01  REG-IN-TRX.
-           05 IN-TRX-CLI-ID      PIC 9(5).
-           05 IN-TRX-ID          PIC 9(5).
-           05 IN-TRX-TIPO        PIC X.
-           05 IN-TRX-VALOR       PIC 9(9).
+       
+       FD  ARQ-CLIENTES
+           LABEL  RECORDS ARE STANDARD
+           RECORD CONTAINS 44 CHARACTERS
+           BLOCK  CONTAINS  0 RECORDS
+           DATA   RECORD IS CLIENTES.
+           COPY CLIENTE.
+       FD  ARQ-TRANSAC
+           LABEL  RECORDS ARE STANDARD
+           RECORD CONTAINS 20 CHARACTERS
+           BLOCK  CONTAINS  0 RECORDS
+           DATA   RECORD IS TRANSAC.
+           COPY TRANSAC.
        FD  ARQ-CLIENTES-OUT.
        01  REG-OUT-CLIENTE.
            05 OUT-CLI-ID         PIC 9(5).
            05 OUT-CLI-NOME       PIC X(30).
            05 OUT-CLI-SALDO      PIC 9(9).
        FD  ARQ-ERROS.
-       01  REG-ERRO-OUT           PIC X(150).
+       01  REG-ERRO-OUT           PIC X(80).
        FD  ARQ-LOG.
-       01  REG-LOG                PIC X(120).
+       01  REG-LOG                PIC X(80).
 
        WORKING-STORAGE SECTION.
 
@@ -113,7 +114,7 @@
                     NOT AT END
                         ADD 1 TO WS-LIDOS-CLI
                         PERFORM VALIDA-CLIENTE-DUPLICADO
-                           IF WS-SQLCODE = 1
+                           IF WS-SQLCODE = -803
                                ADD 1 TO WS-ERROS
                                MOVE SPACES TO REG-ERRO-OUT
                                STRING
@@ -133,12 +134,6 @@
                                MOVE IN-CLI-SALDO
                                    TO TAB-CLI-SALDO(WS-QTD-CLIENTES)
                            END-IF
-                        MOVE IN-CLI-ID
-                            TO TAB-CLI-ID(WS-QTD-CLIENTES)  
-                        MOVE IN-CLI-NOME
-                            TO TAB-CLI-NOME(WS-QTD-CLIENTES) 
-                        MOVE IN-CLI-SALDO
-                            TO TAB-CLI-SALDO(WS-QTD-CLIENTES) 
                END-READ  
            END-PERFORM.
 
@@ -163,11 +158,11 @@
                UNTIL WS-INDICE-CLIENTE > WS-QTD-CLIENTES
                IF TAB-CLI-ID(WS-INDICE-CLIENTE)
                   = IN-CLI-ID
-                  MOVE 1 TO WS-SQLCODE
+                  MOVE -803 TO WS-SQLCODE
                   EXIT PERFORM
                END-IF
            END-PERFORM.
-
+      
        ATUALIZA-SALDO.
            IF IN-TRX-TIPO = 'C'
                ADD IN-TRX-VALOR
