@@ -13,6 +13,9 @@
            SELECT ARQ-TRANSAC
                ASSIGN TO '../DADOS/TRANSAC.txt'
                ORGANIZATION IS LINE SEQUENTIAL.
+           SELECT ARQ-CLIENTES-OUT
+               ASSIGN TO '../SAIDAS/CLIENTES_OUT.txt'
+               ORGANIZATION IS LINE SEQUENTIAL.
            SELECT ARQ-ERROS
                ASSIGN TO '../SAIDAS/ERROS.txt'
                ORGANIZATION IS LINE SEQUENTIAL.
@@ -36,22 +39,27 @@
            BLOCK  CONTAINS  0 RECORDS
            DATA   RECORD IS TRANSAC.
            COPY TRANSAC.
+       FD  ARQ-CLIENTES-OUT.
+       01  REG-OUT-CLIENTE.
+           05 OUT-CLI-ID         PIC 9(5).
+           05 OUT-CLI-NOME       PIC X(30).
+           05 OUT-CLI-SALDO      PIC 9(9).
        FD  ARQ-ERROS.
-       01  REG-ERRO-OUT          PIC X(80).
+       01  REG-ERRO-OUT           PIC X(80).
        FD  ARQ-LOG.
-       01  REG-LOG               PIC X(80).
+       01  REG-LOG                PIC X(80).
 
        WORKING-STORAGE SECTION.
 
        01  WS-CLIENTE.
-           05 CLI-ID             PIC 9(5).
-           05 CLI-NOME           PIC X(30).
-           05 CLI-SALDO          PIC 9(9).
+           05 CLI-ID           PIC 9(5).
+           05 CLI-NOME         PIC X(30).
+           05 CLI-SALDO        PIC 9(9).
        01  WS-FLAGS.
            05 WS-EOF-CLIENTES    PIC X VALUE 'N'.
-             88 EOF-CLIENTES     VALUE 'S'.
+             88 EOF-CLIENTES VALUE 'S'.
            05 WS-EOF-TRX         PIC X VALUE 'N'.
-             88 EOF-TRX          VALUE 'S'.
+             88 EOF-TRX VALUE 'S'.
        01  WS-CONTADORES.
            05 WS-LIDOS-CLI       PIC 9(7) VALUE 0.
            05 WS-LIDOS-TRX       PIC 9(7) VALUE 0.
@@ -60,33 +68,26 @@
            05 WS-COMMIT-COUNT    PIC 9(3) VALUE 0.
        01  WS-NUM-TXT            PIC ZZZ9.
        01  WS-VALIDACAO.
-           05 WS-TRANSAC-VALIDA  PIC X VALUE 'S'.
+           05 WS-TRANSAC-VALIDA PIC X VALUE 'S'.
                88 TRANSAC-VALIDA   VALUE 'S'.
                88 TRANSAC-INVALIDA VALUE 'N'.
-       01  WS-ERRO-TEXTO         PIC X(100).
-       01  WS-ESTATISTICAS.
-           05 WS-QTD-CREDITOS    PIC 9(7) VALUE 0.
-           05 WS-QTD-DEBITOS     PIC 9(7) VALUE 0.
-           05 WS-TOT-CREDITOS    PIC 9(11) VALUE 0.
-           05 WS-TOT-DEBITOS     PIC 9(11) VALUE 0.
-
-       EXEC SQL
-           INCLUDE SQLCA
-       END-EXEC.
-
+       01  WS-ERRO-TEXTO PIC X(100).
+       01  WS-TABELA-CLIENTES.
+       05  WS-CLIENTE OCCURS 100 TIMES.
+           10 TAB-CLI-ID      PIC 9(5).
+           10 TAB-CLI-NOME    PIC X(30).
+           10 TAB-CLI-SALDO   PIC S9(9) COMP.
+       01  WS-QTD-CLIENTES       PIC 9(3) VALUE 0.
+       01  WS-CLIENTE-ENCONTRADO PIC X VALUE 'N'.
+           88 CLIENTE-ENCONTRADO VALUE 'S'.
+       01  WS-INDICE-CLIENTE     PIC 9(3).
        01  WS-SQL.
-           05 WS-SQLCODE         PIC S9(9) COMP VALUE 0.
-       01  HV-CLIENTE.
-           05 HV-CLI-ID          PIC S9(9) COMP.
-           05 HV-CLI-NOME        PIC X(30).
-           05 HV-CLI-SALDO       PIC S9(9) COMP.   
-       01  HV-TRANSACAO.
-               05 HV-TRX-ID      PIC S9(9) COMP.
-               05 HV-TRX-CLI-ID  PIC S9(9) COMP.
-               05 HV-TRX-TIPO    PIC X.
-               05 HV-TRX-VALOR   PIC S9(9) COMP. 
-       01  HV-ERRO.
-           05 HV-DESC-ERRO       PIC X(100).
+           05 WS-SQLCODE PIC S9(9) COMP VALUE 0.
+       01  WS-ESTATISTICAS.
+           05 WS-QTD-CREDITOS PIC 9(7) VALUE 0.
+           05 WS-QTD-DEBITOS  PIC 9(7) VALUE 0.
+           05 WS-TOT-CREDITOS PIC 9(11) VALUE 0.
+           05 WS-TOT-DEBITOS  PIC 9(11) VALUE 0.
 
        PROCEDURE DIVISION.
 
@@ -101,119 +102,74 @@
        INICIALIZA.
            OPEN INPUT  ARQ-CLIENTES
            OPEN INPUT  ARQ-TRANSAC
+           OPEN OUTPUT ARQ-CLIENTES-OUT
            OPEN OUTPUT ARQ-LOG
            OPEN OUTPUT ARQ-ERROS.
 
        PROCESSA-CLIENTES.
            PERFORM UNTIL EOF-CLIENTES
                READ ARQ-CLIENTES
-                  AT END
-                     SET EOF-CLIENTES TO TRUE
-               NOT AT END
-                     ADD 1 TO WS-LIDOS-CLI
-                     IF IN-CLI-NOME = SPACES
-                        MOVE "NOME OBRIGATORIO"
-                           TO WS-ERRO-TEXTO
-                        PERFORM REGISTRA-ERRO-CLIENTE
-                     ELSE
-                        PERFORM GRAVA-CLIENTE-DB2
-                     END-IF
-               END-READ
+                    AT END
+                        SET EOF-CLIENTES TO TRUE
+                    NOT AT END
+                        ADD 1 TO WS-LIDOS-CLI
+                        PERFORM VALIDA-CLIENTE-DUPLICADO
+                           IF WS-SQLCODE = -803
+                               ADD 1 TO WS-ERROS
+                               MOVE SPACES TO REG-ERRO-OUT
+                               STRING
+                                   IN-CLI-ID
+                                   DELIMITED BY SIZE
+                                   " - CLIENTE DUPLICADO"
+                                   DELIMITED BY SIZE
+                                   INTO REG-ERRO-OUT
+                               END-STRING
+                               WRITE REG-ERRO-OUT
+                           ELSE
+                               ADD 1 TO WS-QTD-CLIENTES
+                               MOVE IN-CLI-ID
+                                   TO TAB-CLI-ID(WS-QTD-CLIENTES)
+                               MOVE IN-CLI-NOME
+                                   TO TAB-CLI-NOME(WS-QTD-CLIENTES)
+                               MOVE IN-CLI-SALDO
+                                   TO TAB-CLI-SALDO(WS-QTD-CLIENTES)
+                           END-IF
+               END-READ  
            END-PERFORM.
 
-       REGISTRA-ERRO-CLIENTE.
-           ADD 1 TO WS-ERROS
-           MOVE SPACES TO REG-ERRO-OUT
-           STRING
-               IN-CLI-ID
-               DELIMITED BY SIZE
-               " - "
-               DELIMITED BY SIZE
-               WS-ERRO-TEXTO
-               DELIMITED BY SIZE
-               INTO REG-ERRO-OUT
-           END-STRING
-           WRITE REG-ERRO-OUT
-           EXEC SQL
-               INSERT INTO ERROS_PROCESSAMENTO
-               (
-                   CLI_ID,
-                   DESCRICAO_ERRO,
-                   DT_OCORRENCIA
-               )
-               VALUES
-               (
-                   :IN-CLI-ID,
-                   :WS-ERRO-TEXTO,
-                   CURRENT TIMESTAMP
-               )
-           END-EXEC.
-       
-       GRAVA-CLIENTE-DB2.
-           EXEC SQL
-               SELECT CLI_ID
-               INTO :HV-CLI-ID
-               FROM CLIENTES
-               WHERE CLI_ID = :IN-CLI-ID
-           END-EXEC
-           EVALUATE SQLCODE
-               WHEN 100
-                   EXEC SQL
-                       INSERT INTO CLIENTES
-                       (
-                           CLI_ID,
-                           CLI_NOME,
-                           CLI_SALDO,
-                           DT_ATUALIZACAO
-                       )
-                       VALUES
-                       (
-                           :IN-CLI-ID,
-                           :IN-CLI-NOME,
-                           :IN-CLI-SALDO,
-                           CURRENT DATE
-                       )
-                   END-EXEC
-               WHEN 0
-                   EXEC SQL
-                       UPDATE CLIENTES
-                           SET CLI_NOME = :IN-CLI-NOME,
-                           CLI_SALDO = :IN-CLI-SALDO,
-                           DT_ATUALIZACAO = CURRENT DATE
-                        WHERE CLI_ID = :IN-CLI-ID
-                   END-EXEC
-               WHEN OTHER
-                   PERFORM TRATA-ERRO-SQL
-           END-EVALUATE.
-
        BUSCA-CLIENTE.
-           EXEC SQL
-               SELECT CLI_SALDO
-               INTO :HV-CLI-SALDO
-               FROM CLIENTES
-               WHERE CLI_ID = :IN-TRX-CLI-ID
-           END-EXEC.
+           MOVE 100 TO WS-SQLCODE
+           MOVE 'N' TO WS-CLIENTE-ENCONTRADO
+           PERFORM VARYING WS-INDICE-CLIENTE
+               FROM 1 BY 1
+               UNTIL WS-INDICE-CLIENTE > WS-QTD-CLIENTES
+               IF TAB-CLI-ID(WS-INDICE-CLIENTE)
+                  = IN-TRX-CLI-ID
+                  MOVE 'S' TO WS-CLIENTE-ENCONTRADO
+                  MOVE 0 TO WS-SQLCODE
+                  EXIT PERFORM
+               END-IF
+           END-PERFORM.
+
+       VALIDA-CLIENTE-DUPLICADO.
+           MOVE 0 TO WS-SQLCODE
+           PERFORM VARYING WS-INDICE-CLIENTE
+               FROM 1 BY 1
+               UNTIL WS-INDICE-CLIENTE > WS-QTD-CLIENTES
+               IF TAB-CLI-ID(WS-INDICE-CLIENTE)
+                  = IN-CLI-ID
+                  MOVE -803 TO WS-SQLCODE
+                  EXIT PERFORM
+               END-IF
+           END-PERFORM.
       
        ATUALIZA-SALDO.
-           IF IN-TRX-TIPO = 'C'    
-               EXEC SQL
-                   UPDATE CLIENTES
-                       SET CLI_SALDO =
-                           CLI_SALDO + :IN-TRX-VALOR,
-                           DT_ATUALIZACAO = CURRENT DATE
-                   WHERE CLI_ID = :IN-TRX-CLI-ID
-               END-EXEC
+           IF IN-TRX-TIPO = 'C'
+               ADD IN-TRX-VALOR
+                    TO TAB-CLI-SALDO(WS-INDICE-CLIENTE)
            ELSE
-               EXEC SQL
-                   UPDATE CLIENTES
-                       SET CLI_SALDO =
-                           CLI_SALDO - :IN-TRX-VALOR,
-                           DT_ATUALIZACAO = CURRENT DATE
-                   WHERE CLI_ID = :IN-TRX-CLI-ID
-               END-EXEC
-           END-IF.
-           IF SQLCODE NOT = 0
-               PERFORM TRATA-ERRO-SQL
+               SUBTRACT IN-TRX-VALOR
+                    FROM TAB-CLI-SALDO(WS-INDICE-CLIENTE)
            END-IF.
 
        PROCESSA-TRANSAC.
@@ -233,7 +189,7 @@
        VALIDA-TRANSAC.
            SET TRANSAC-VALIDA TO TRUE
            PERFORM BUSCA-CLIENTE
-           IF SQLCODE = 100
+           IF WS-SQLCODE = 100
                MOVE "CLIENTE INEXISTENTE"
                    TO WS-ERRO-TEXTO
                SET TRANSAC-INVALIDA TO TRUE
@@ -258,12 +214,13 @@
            END-IF
            IF TRANSAC-VALIDA
                IF IN-TRX-TIPO = 'D'
-                   IF IN-TRX-VALOR > HV-CLI-SALDO
-                       MOVE "SALDO INSUFICIENTE"
-                       TO WS-ERRO-TEXTO
-                       SET TRANSAC-INVALIDA TO TRUE
-                       PERFORM REGISTRA-ERRO
-                   END-IF
+                    IF IN-TRX-VALOR >
+                       TAB-CLI-SALDO(WS-INDICE-CLIENTE)
+                        MOVE "SALDO INSUFICIENTE"
+                            TO WS-ERRO-TEXTO
+                        SET TRANSAC-INVALIDA TO TRUE
+                        PERFORM REGISTRA-ERRO
+                    END-IF
                END-IF
            END-IF.
 
@@ -279,87 +236,54 @@
                DELIMITED BY SIZE
                INTO REG-ERRO-OUT
            END-STRING
-           WRITE REG-ERRO-OUT
-           EXEC SQL
-               INSERT INTO ERROS_PROCESSAMENTO
-               (
-                   CLI_ID,
-                   DESCRICAO_ERRO,
-                   DT_OCORRENCIA
-               )
-               VALUES
-               (
-                   :IN-TRX-CLI-ID,
-                   :WS-ERRO-TEXTO,
-                   CURRENT TIMESTAMP
-               )
-           END-EXEC.
+           WRITE REG-ERRO-OUT.
 
        EXECUTA-TRANSAC.
-           PERFORM INSERE-TRANSACAO
-           IF SQLCODE = 0
-               PERFORM ATUALIZA-SALDO
-               IF IN-TRX-TIPO = 'C'
-                   ADD 1 TO WS-QTD-CREDITOS
-                   ADD IN-TRX-VALOR TO WS-TOT-CREDITOS
-               ELSE
-                   ADD 1 TO WS-QTD-DEBITOS
-                   ADD IN-TRX-VALOR TO WS-TOT-DEBITOS
-               END-IF
+           PERFORM ATUALIZA-SALDO
+           IF IN-TRX-TIPO = 'C'
+              ADD 1 TO WS-QTD-CREDITOS
+              ADD IN-TRX-VALOR TO WS-TOT-CREDITOS
+           ELSE
+              ADD 1 TO WS-QTD-DEBITOS
+              ADD IN-TRX-VALOR TO WS-TOT-DEBITOS
            END-IF
+           PERFORM INSERE-TRANSACAO
            PERFORM CONTROLE-COMMIT
            ADD 1 TO WS-PROCESSADOS.
 
        INSERE-TRANSACAO.
-           EXEC SQL
-               INSERT INTO TRANSACOES
-               (
-                   TRX_ID,
-                   CLI_ID,
-                   TRX_TIPO,
-                   TRX_VALOR,
-                   DT_PROCESSAMENTO
-               )
-               VALUES
-               (
-                   :IN-TRX-ID,
-                   :IN-TRX-CLI-ID,
-                   :IN-TRX-TIPO,
-                   :IN-TRX-VALOR,
-                   CURRENT DATE
-               )
-           END-EXEC          
-           IF SQLCODE NOT = 0
-               PERFORM TRATA-ERRO-SQL
-           END-IF.
-
-       TRATA-ERRO-SQL.
-           MOVE SQLCODE TO WS-SQLCODE
            MOVE SPACES TO REG-LOG
            STRING
-               "ERRO DB2 SQLCODE="
+               "TRX="
                DELIMITED BY SIZE
-               SQLCODE
+               IN-TRX-ID
+               DELIMITED BY SIZE
+               " CLI="
+               DELIMITED BY SIZE
+               IN-TRX-CLI-ID
+               DELIMITED BY SIZE
+               " TIPO="
+               DELIMITED BY SIZE
+               IN-TRX-TIPO
+               DELIMITED BY SIZE
+               " VALOR="
+               DELIMITED BY SIZE
+               IN-TRX-VALOR
                DELIMITED BY SIZE
                INTO REG-LOG
            END-STRING
-           WRITE REG-LOG
-           EXEC SQL
-               ROLLBACK
-           END-EXEC.
+           WRITE REG-LOG.
 
-       CONTROLE-COMMIT.    
-           ADD 1 TO WS-COMMIT-COUNT    
-           IF WS-COMMIT-COUNT >= 100   
-               EXEC SQL
-                   COMMIT
-               END-EXEC  
-               MOVE 0 TO WS-COMMIT-COUNT
-               MOVE "COMMIT EXECUTADO"
-                   TO REG-LOG
-               WRITE REG-LOG 
+       CONTROLE-COMMIT.
+           ADD 1 TO WS-COMMIT-COUNT
+           IF WS-COMMIT-COUNT >= 100
+              MOVE
+              'COMMIT SIMULADO - 100 REGISTROS'
+              TO REG-LOG
+              WRITE REG-LOG
+              MOVE 0 TO WS-COMMIT-COUNT
            END-IF.
-       
+
        GERA-RELATORIO.
            MOVE SPACES TO REG-LOG
            MOVE "===== RELATORIO FINAL ====="
@@ -447,10 +371,19 @@
            WRITE REG-LOG.
 
        FINALIZA.
-           EXEC SQL
-               COMMIT
-           END-EXEC
+           PERFORM VARYING WS-INDICE-CLIENTE
+               FROM 1 BY 1
+               UNTIL WS-INDICE-CLIENTE > WS-QTD-CLIENTES
+               MOVE TAB-CLI-ID(WS-INDICE-CLIENTE)
+                   TO OUT-CLI-ID
+               MOVE TAB-CLI-NOME(WS-INDICE-CLIENTE)
+                   TO OUT-CLI-NOME
+               MOVE TAB-CLI-SALDO(WS-INDICE-CLIENTE)
+                   TO OUT-CLI-SALDO
+               WRITE REG-OUT-CLIENTE
+           END-PERFORM.
            CLOSE ARQ-CLIENTES
            CLOSE ARQ-TRANSAC
+           CLOSE ARQ-CLIENTES-OUT
            CLOSE ARQ-ERROS
            CLOSE ARQ-LOG.
